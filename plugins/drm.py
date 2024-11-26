@@ -10,7 +10,7 @@ from main import Config
 
 @ace.on_message(
     (filters.chat(Config.GROUPS) | filters.chat(Config.AUTH_USERS)) & 
-    filters.incoming & filters.command("bulk_drm", prefixes=Config.prefixes)
+        filters.incoming & filters.command("bulk_drm", prefixes=Config.prefixes)
 )
 async def bulk_drm(bot: ace, m: Message):
     """Bulk DRM video processing."""
