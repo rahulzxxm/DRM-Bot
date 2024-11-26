@@ -57,21 +57,22 @@ async def bulk_drm(bot: ace, m: Message):
         name = f"{TgClient.parse_name(raw_name)} ({quality}p)"
         keys_str = " ".join(keys)
 
-        print(mpd, name, quality)
+        print(f"Processing: {mpd} - {name} - {quality}p")
 
         BOT = TgClient(bot, m, path)
         Thumb = await BOT.thumb()
-        prog = await bot.send_message(m.chat.id, f"**Downloading Drm Video!** - [{name}]({mpd})")
-
-        # Download the video using yt-dlp
-        cmd1 = f'yt-dlp -o "{path}/fileName.%(ext)s" -f "bestvideo[height<={int(quality)}]+bestaudio" --allow-unplayable-format --external-downloader aria2c "{mpd}"'
-        os.system(cmd1)
-        
-        avDir = os.listdir(path)
-        print(avDir)
-        print("Decrypting")
+        prog = await bot.send_message(m.chat.id, f"**Downloading DRM Video!** - [{name}]({mpd})")
 
         try:
+            # Download the video using yt-dlp with the appropriate quality
+            cmd1 = f'yt-dlp -o "{path}/fileName.%(ext)s" -f "bestvideo[height<={int(quality)}]+bestaudio" --allow-unplayable-format --external-downloader aria2c "{mpd}"'
+            os.system(cmd1)
+
+            avDir = os.listdir(path)
+            print("Files downloaded:", avDir)
+            print("Decrypting...")
+
+            # Decrypt video and audio files using mp4decrypt
             for data in avDir:
                 if data.endswith("mp4"):
                     cmd2 = f'mp4decrypt {keys_str} --show-progress "{path}/{data}" "{path}/video.mp4"'
@@ -86,6 +87,7 @@ async def bulk_drm(bot: ace, m: Message):
             cmd4 = f'ffmpeg -i "{path}/video.mp4" -i "{path}/audio.m4a" -c copy "{path}/{name}.mkv"'
             os.system(cmd4)
 
+            # Clean up intermediate files
             os.remove(f"{path}/video.mp4")
             os.remove(f"{path}/audio.m4a")
             filename = f"{path}/{name}.mkv"
@@ -94,12 +96,14 @@ async def bulk_drm(bot: ace, m: Message):
             # Upload video to Telegram
             UL = Upload_to_Tg(bot=bot, m=m, file_path=filename, name=name, Thumb=Thumb, path=path, show_msg=prog, caption=cc)
             await UL.upload_video()
-            print("Done")
+            print(f"Successfully uploaded: {name}")
+        
         except Exception as e:
             await prog.delete(True)
             await m.reply_text(f"**Error**\n\n`{str(e)}`\n\nOr Maybe Video not Available in {quality}")
+        
         finally:
             if os.path.exists(path):
                 shutil.rmtree(path)
 
-    await m.reply_text("Bulk processing complete.")
+    await m.reply_text("Bulk DRM processing complete.")
