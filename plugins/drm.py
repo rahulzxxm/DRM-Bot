@@ -57,53 +57,61 @@ async def bulk_drm(bot: ace, m: Message):
         name = f"{TgClient.parse_name(raw_name)} ({quality}p)"
         keys_str = " ".join(keys)
 
-        print(f"Processing: {mpd} - {name} - {quality}p")
+        print(mpd, name, quality)
 
         BOT = TgClient(bot, m, path)
         Thumb = await BOT.thumb()
-        prog = await bot.send_message(m.chat.id, f"**Downloading DRM Video!** - [{name}]({mpd})")
+        prog = await bot.send_message(m.chat.id, f"**Downloading Drm Video!** - [{name}]({mpd})")
+
+        # Download the video using yt-dlp
+        cmd1 = f'yt-dlp -o "{path}/fileName.%(ext)s" -f "bestvideo[height<={int(quality)}]+bestaudio" --allow-unplayable-format --external-downloader aria2c "{mpd}"'
+        os.system(cmd1)
+        
+        avDir = os.listdir(path)
+        print(avDir)
+        print("Decrypting")
 
         try:
-            # Download the video using yt-dlp with the appropriate quality
-            cmd1 = f'yt-dlp -o "{path}/fileName.%(ext)s" -f "bestvideo[height<={int(quality)}]+bestaudio" --allow-unplayable-format --external-downloader aria2c "{mpd}"'
-            os.system(cmd1)
-
-            avDir = os.listdir(path)
-            print("Files downloaded:", avDir)
-            print("Decrypting...")
-
-            # Decrypt video and audio files using mp4decrypt
+            video_file = None
+            audio_file = None
             for data in avDir:
                 if data.endswith("mp4"):
-                    cmd2 = f'mp4decrypt {keys_str} --show-progress "{path}/{data}" "{path}/video.mp4"'
-                    os.system(cmd2)
-                    os.remove(f'{path}/{data}')
+                    video_file = data
                 elif data.endswith("m4a"):
-                    cmd3 = f'mp4decrypt {keys_str} --show-progress "{path}/{data}" "{path}/audio.m4a"'
-                    os.system(cmd3)
-                    os.remove(f'{path}/{data}')
+                    audio_file = data
 
-            # Combine video and audio using ffmpeg
-            cmd4 = f'ffmpeg -i "{path}/video.mp4" -i "{path}/audio.m4a" -c copy "{path}/{name}.mkv"'
-            os.system(cmd4)
+            if video_file and audio_file:
+                cmd2 = f'mp4decrypt {keys_str} --show-progress "{path}/{video_file}" "{path}/video.mp4"'
+                os.system(cmd2)
+                os.remove(f'{path}/{video_file}')
+                
+                cmd3 = f'mp4decrypt {keys_str} --show-progress "{path}/{audio_file}" "{path}/audio.m4a"'
+                os.system(cmd3)
+                os.remove(f'{path}/{audio_file}')
 
-            # Clean up intermediate files
-            os.remove(f"{path}/video.mp4")
-            os.remove(f"{path}/audio.m4a")
-            filename = f"{path}/{name}.mkv"
-            cc = f"{name}.mkv\n\n**Description:-**\n{caption}"
+                # Combine video and audio using ffmpeg
+                if os.path.exists(f"{path}/video.mp4") and os.path.exists(f"{path}/audio.m4a"):
+                    cmd4 = f'ffmpeg -i "{path}/video.mp4" -i "{path}/audio.m4a" -c copy "{path}/{name}.mkv"'
+                    os.system(cmd4)
 
-            # Upload video to Telegram
-            UL = Upload_to_Tg(bot=bot, m=m, file_path=filename, name=name, Thumb=Thumb, path=path, show_msg=prog, caption=cc)
-            await UL.upload_video()
-            print(f"Successfully uploaded: {name}")
-        
+                    os.remove(f"{path}/video.mp4")
+                    os.remove(f"{path}/audio.m4a")
+                    filename = f"{path}/{name}.mkv"
+                    cc = f"{name}.mkv\n\n**Description:-**\n{caption}"
+
+                    # Upload video to Telegram
+                    UL = Upload_to_Tg(bot=bot, m=m, file_path=filename, name=name, Thumb=Thumb, path=path, show_msg=prog, caption=cc)
+                    await UL.upload_video()
+                    print("Done")
+                else:
+                    raise FileNotFoundError("Video or audio file not found after decryption.")
+            else:
+                raise FileNotFoundError("Video or audio files not found in the downloaded directory.")
         except Exception as e:
             await prog.delete(True)
             await m.reply_text(f"**Error**\n\n`{str(e)}`\n\nOr Maybe Video not Available in {quality}")
-        
         finally:
             if os.path.exists(path):
                 shutil.rmtree(path)
 
-    await m.reply_text("Bulk DRM processing complete.")
+    await m.reply_text("Bulk processing complete.")
