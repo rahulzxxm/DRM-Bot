@@ -1,105 +1,130 @@
 import os
 import subprocess
-import shutil
 import json
-import logging
-from pyrogram import filters, Client as ace
+import re
+import time
+import signal
+from pyrogram import Client, filters
 from pyrogram.types import Message
-from main import Config, LOGGER, prefixes
-from handlers.uploader import Upload_to_Tg
-from handlers.tg import TgClient
 
+# Initialize the bot
 logging.basicConfig(level=logging.INFO)  # Configure logging
 
 @ace.on_message(
     (filters.chat(Config.GROUPS) | filters.chat(Config.AUTH_USERS)) & 
     filters.incoming & filters.command("drm", prefixes=prefixes)
 )
-async def drm(bot: ace, m: Message):
-    await m.reply_text("Please upload the JSON file containing video details.")
-    response = await bot.listen(m.chat.id, filters.document, timeout=300)
-    
-    json_file_path = f"{Config.DOWNLOAD_LOCATION}/{response.document.file_name}"
-    await response.download(file_name=json_file_path)
+def progress(current, total):
+    print("\rUpload Progress: {:.1f}%".format(current * 100 / total), end='')
+
+# Sanitize the filename to avoid any special characters that can cause issues
+def sanitize_filename(filename):
+    return re.sub(r'[<>:"/\\|?*]', '_', filename)
+
+# Function to download video using the N_m3u8DL-RE tool
+def download_video(entry, temp_dir):
+    mpd = entry["mpd"]
+    name = sanitize_filename(entry["name"])
+    keys = entry["keys"]
+
+    command = [
+        "./N_m3u8DL-RE",
+        mpd,
+        "-M", "format=mp4",
+        "--save-name", name,
+        "--thread-count", "64",
+        "--append-url-params",
+        "-mt",
+        "--auto-select"
+    ]
+
+    # Add keys to the command if provided
+    for key in keys:
+        command.extend(["--key", key])
+
+    os.makedirs(temp_dir, exist_ok=True)
+    command.extend(["--save-dir", temp_dir])
 
     try:
-        with open(json_file_path, 'r') as f:
-            video_data = json.load(f)
+        subprocess.run(command, check=True)
+        return os.path.join(temp_dir, f"{name}.mp4")
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Download failed: {str(e)}")
+
+# Command to handle /drm and upload a JSON file
+@bot.on_message(filters.private & filters.document)
+def handle_json_file(client, message: Message):
+    try:
+        # Check if the uploaded file is a JSON file
+        if not message.document.file_name.endswith(".json"):
+            message.reply_text("Please send a valid .json file.")
+            return
+
+        # Download the file and process it
+        file_path = message.download()
+        message.reply_text("JSON file received. Processing...")
+
+        with open(file_path, "r") as f:
+            data = json.load(f)
+
+        temp_dir = "downloads"
+
+        for entry in data:
+            name = sanitize_filename(entry["name"])
+            message.reply_text(f"Starting download for: {name}")
+
+            try:
+                # Download the video
+                video_path = download_video(entry, temp_dir)
+
+                if not os.path.exists(video_path):
+                    message.reply_text(f"Download failed for {name}: File not found")
+                    continue
+
+                message.reply_text(f"Download complete. Starting upload for: {name}")
+
+                # Upload the video with a progress bar
+                start_time = time.time()
+
+                client.send_video(
+                    chat_id=message.chat.id,
+                    video=video_path,
+                    caption=f"Uploaded: {name}",
+                    progress=progress,
+                    width=1920,
+                    height=1080
+                )
+
+                end_time = time.time()
+                time_taken = end_time - start_time
+                message.reply_text(f"Upload complete for {name}. Time taken: {time_taken:.2f} seconds")
+
+                # Clean up downloaded video
+                if os.path.exists(video_path):
+                    os.remove(video_path)
+
+            except Exception as e:
+                message.reply_text(f"Error processing {name}: {str(e)}")
+                continue
+
+        message.reply_text("All videos processed successfully!")
+
     except Exception as e:
-        logging.error(f"Error reading JSON file: {e}")
-        await m.reply_text(f"Error reading JSON file: {e}")
-        return
+        message.reply_text(f"An error occurred: {str(e)}")
 
-    for video in video_data:
-        try:
-            mpd = video.get("mpd")
-            raw_name = video.get("name")
-            Q = video.get("quality", "720")
-            caption = video.get("caption", "")
-            keys = video.get("keys", [])
+# Command to restart the bot
+@bot.on_message(filters.private & filters.command("restart"))
+def restart(client, message: Message):
+    try:
+        message.reply_text("Restarting the bot...")
+        os.kill(os.getpid(), signal.SIGINT)  # This will stop the bot and trigger a restart if supervised (like with systemd or pm2)
+    except Exception as e:
+        message.reply_text(f"Error restarting the bot: {str(e)}")
 
-            if not mpd or not raw_name or not keys:
-                await m.reply_text(f"Skipping entry due to missing details: {video}")
-                continue
+# Command to handle /drm and ask for the JSON file upload
+@bot.on_message(filters.private & filters.command("drm"))
+async def drm(client, message: Message):
+    await message.reply_text("Please upload the .json file to process.")
 
-            name = f"{TgClient.parse_name(raw_name)} ({Q}p)"
-            path = f"{Config.DOWNLOAD_LOCATION}/{m.chat.id}/{name}"
-            os.makedirs(path, exist_ok=True)
-
-            key_string = " ".join(keys)
-
-            BOT = TgClient(bot, m, path)
-            Thumb = await BOT.thumb()
-            prog = await bot.send_message(m.chat.id, f"**Downloading DRM Video!** - [{name}]({mpd})")
-
-            # Use yt-dlp directly via Python API
-            ydl_opts = {
-                'outtmpl': f'{path}/fileName.%(ext)s',
-                'format': f'bestvideo[height<={int(Q)}]+bestaudio',
-                'external_downloader': 'aria2c',  # External downloader (aria2c)
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([mpd])
-
-            # Decryption steps (with checks)
-            avDir = os.listdir(path)
-            mp4_file = next((f for f in avDir if f.endswith(".mp4")), None)
-            m4a_file = next((f for f in avDir if f.endswith(".m4a")), None)
-
-            if mp4_file and m4a_file:
-                cmd2 = f'mp4decrypt {key_string} --show-progress "{path}/{mp4_file}" "{path}/video.mp4"'
-                subprocess.run(cmd2, shell=True, check=True)
-                os.remove(f'{path}/{mp4_file}')
-
-                cmd3 = f'mp4decrypt {key_string} --show-progress "{path}/{m4a_file}" "{path}/audio.m4a"'
-                subprocess.run(cmd3, shell=True, check=True)
-                os.remove(f'{path}/{m4a_file}')
-            else:
-                await m.reply_text(f"Error: Missing .mp4 or .m4a files for decryption.")
-                continue
-
-            # Merging with ffmpeg
-            cmd4 = f'ffmpeg -i "{path}/video.mp4" -i "{path}/audio.m4a" -c copy "{path}/{name}.mkv"'
-            subprocess.run(cmd4, shell=True, check=True)
-            os.remove(f"{path}/video.mp4")
-            os.remove(f"{path}/audio.m4a")
-
-            # Uploading to Telegram
-            filename = f"{path}/{name}.mkv"
-            cc = f"{name}.mkv\n\n**Description:-**\n{caption}"
-            UL = Upload_to_Tg(bot=bot, m=m, file_path=filename, name=name, Thumb=Thumb, path=path, show_msg=prog, caption=cc)
-            await UL.upload_video()
-            logging.info(f"Processed and uploaded: {name}")
-        except Exception as e:
-            logging.error(f"Error while processing {video.get('name', 'Unknown')}: {e}")
-            await prog.delete(True)
-            await m.reply_text(f"Error processing {video.get('name', 'Unknown')}:\n\n{e}")
-        finally:
-            if os.path.exists(path):
-                shutil.rmtree(path)
-            await m.reply_text(f"Finished processing: {raw_name}")
-
-    if os.path.exists(json_file_path):
-        os.remove(json_file_path)
-    
-    await m.reply_text("All videos processed successfully.")
+# Start the bot
+bot.run()
