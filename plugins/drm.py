@@ -11,32 +11,39 @@ from main import Config, prefixes
 
 @ace.on_message(
     (filters.chat(Config.GROUPS) | filters.chat(Config.AUTH_USERS)) &
-    filters.incoming & filters.command("bulk_drm", prefixes=prefixes)
+    filters.incoming & filters.command("bulkdrm", prefixes=prefixes)
 )
 async def bulk_drm(bot: ace, m: Message):
-    # Check if the user uploaded a file
-    if not m.document:
-        await m.reply_text("**Error**: Please upload a JSON file containing video details.")
+    """Bulk DRM video processing."""
+    await m.reply_text("Please upload the JSON file containing video data.")
+    
+    # Listen for the file sent by the user
+    file_msg = await bot.listen(m.chat.id)
+
+    # Validate that a file has been sent
+    if not file_msg.document:
+        await m.reply_text("Invalid file format. Please send a valid JSON file.")
         return
 
-    # Download the uploaded file
-    file_id = m.document.file_id
-    file_name = f"{Config.DOWNLOAD_LOCATION}/uploaded_videos.json"
-    downloaded_file = await bot.download_media(file_id, file_name)
+    # Define file path and ensure the directory exists
+    file_path = f"{Config.DOWNLOAD_LOCATION}/{m.chat.id}/bulk_data.json"
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    
+    # Download the file to the specified location
+    await file_msg.download(file_path)
 
-    # Try to open and parse the uploaded JSON file
+    # Read the JSON file
     try:
-        with open(downloaded_file, "r") as json_file:
-            videos_data = json.load(json_file)
-    except json.JSONDecodeError:
-        await m.reply_text("**Error**: Invalid JSON format!")
-        return
-    except FileNotFoundError:
-        await m.reply_text("**Error**: File not found!")
+        with open(file_path, "r") as f:
+            video_data = json.load(f)
+            if not isinstance(video_data, list):
+                raise ValueError("Invalid JSON structure. Expected a list of video objects.")
+    except Exception as e:
+        await m.reply_text(f"Error reading JSON file: {str(e)}")
         return
 
     # Process each video entry in the JSON file
-    for video in videos_data:
+    for video in video_data:
         mpd = video.get("mpd")
         raw_name = video.get("name")
         quality = video.get("quality")
