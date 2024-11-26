@@ -11,19 +11,28 @@ from main import Config, prefixes
 
 @ace.on_message(
     (filters.chat(Config.GROUPS) | filters.chat(Config.AUTH_USERS)) &
-    filters.incoming & filters.command("drm_bulk", prefixes=prefixes)
+    filters.incoming & filters.command("bulk_drm", prefixes=prefixes)
 )
-async def drm_bulk(bot: ace, m: Message):
-    # Load the JSON data
-    try:
-        file_path = f"{Config.DOWNLOAD_LOCATION}/videos.json"  # Path to the JSON file
-        with open(file_path, "r") as json_file:
-            videos_data = json.load(json_file)
-    except FileNotFoundError:
-        await m.reply_text("**Error**: JSON file not found!")
+async def bulk_drm(bot: ace, m: Message):
+    # Check if the user uploaded a file
+    if not m.document:
+        await m.reply_text("**Error**: Please upload a JSON file containing video details.")
         return
+
+    # Download the uploaded file
+    file_id = m.document.file_id
+    file_name = f"{Config.DOWNLOAD_LOCATION}/uploaded_videos.json"
+    downloaded_file = await bot.download_media(file_id, file_name)
+
+    # Try to open and parse the uploaded JSON file
+    try:
+        with open(downloaded_file, "r") as json_file:
+            videos_data = json.load(json_file)
     except json.JSONDecodeError:
         await m.reply_text("**Error**: Invalid JSON format!")
+        return
+    except FileNotFoundError:
+        await m.reply_text("**Error**: File not found!")
         return
 
     # Process each video entry in the JSON file
@@ -81,7 +90,7 @@ async def drm_bulk(bot: ace, m: Message):
             print("Done")
         except Exception as e:
             await prog.delete(True)
-            await m.reply_text(f"**Error**\n\n`{str(e)}`\n\nOr May be Video not Available in {quality}")
+            await m.reply_text(f"**Error**\n\n`{str(e)}`\n\nOr Maybe Video not Available in {quality}")
         finally:
             if os.path.exists(path):
                 shutil.rmtree(path)
