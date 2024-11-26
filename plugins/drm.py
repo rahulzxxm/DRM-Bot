@@ -10,9 +10,9 @@ from main import Config, prefixes
 
 @ace.on_message(
     (filters.chat(Config.GROUPS) | filters.chat(Config.AUTH_USERS)) &
-    filters.incoming & filters.command("drm", prefixes=prefixes)
+    filters.incoming & filters.command("bulkdrm", prefixes=prefixes)
 )
-async def drm(bot: ace, m: Message):
+async def bulk_drm(bot: ace, m: Message):
     """Bulk DRM video processing."""
     # Ask the user to upload the JSON file
     await m.reply_text("Please upload the JSON file containing video data.")
