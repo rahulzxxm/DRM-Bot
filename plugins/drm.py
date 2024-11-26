@@ -6,99 +6,89 @@ from pyrogram import filters, Client as ace
 from pyrogram.types import Message
 from handlers.uploader import Upload_to_Tg
 from handlers.tg import TgClient
-from main import Config, prefixes
+from main import Config, LOGGER, prefixes
+
+
+async def process_video(bot, m, mpd, raw_name, quality, caption, keys):
+    path = f"{Config.DOWNLOAD_LOCATION}/{m.chat.id}"
+    os.makedirs(path, exist_ok=True)
+
+    name = f"{TgClient.parse_name(raw_name)} ({quality}p)"
+    keys_str = " ".join(keys)
+
+    print(mpd, name, quality)
+
+    BOT = TgClient(bot, m, path)
+    Thumb = await BOT.thumb()
+    prog = await bot.send_message(m.chat.id, f"**Downloading Drm Video!** - [{name}]({mpd})")
+
+    # Download the video using yt-dlp
+    cmd1 = f'yt-dlp -o "{path}/fileName.%(ext)s" -f "bestvideo[height<={int(quality)}]+bestaudio" --allow-unplayable-format --external-downloader aria2c "{mpd}"'
+    os.system(cmd1)
+    
+    avDir = os.listdir(path)
+    print(avDir)
+    print("Decrypting")
+
+    try:
+        for data in avDir:
+            if data.endswith("mp4"):
+                cmd2 = f'mp4decrypt {keys_str} --show-progress "{path}/{data}" "{path}/video.mp4"'
+                os.system(cmd2)
+                os.remove(f'{path}/{data}')
+            elif data.endswith("m4a"):
+                cmd3 = f'mp4decrypt {keys_str} --show-progress "{path}/{data}" "{path}/audio.m4a"'
+                os.system(cmd3)
+                os.remove(f'{path}/{data}')
+
+        # Combine video and audio using ffmpeg
+        cmd4 = f'ffmpeg -i "{path}/video.mp4" -i "{path}/audio.m4a" -c copy "{path}/{name}.mkv"'
+        os.system(cmd4)
+
+        os.remove(f"{path}/video.mp4")
+        os.remove(f"{path}/audio.m4a")
+        filename = f"{path}/{name}.mkv"
+        cc = f"{name}.mkv\n\n**Description:-**\n{caption}"
+
+        # Upload video to Telegram
+        UL = Upload_to_Tg(bot=bot, m=m, file_path=filename, name=name, Thumb=Thumb, path=path, show_msg=prog, caption=cc)
+        await UL.upload_video()
+        print("Done")
+    except Exception as e:
+        await prog.delete(True)
+        await m.reply_text(f"**Error**\n\n`{str(e)}`\n\nOr May be Video not Available in {quality}")
+    finally:
+        if os.path.exists(path):
+            shutil.rmtree(path)
+        await m.reply_text("Done")
+
 
 @ace.on_message(
     (filters.chat(Config.GROUPS) | filters.chat(Config.AUTH_USERS)) &
-    filters.incoming & filters.command("bulkdrm", prefixes=prefixes)
+    filters.incoming & filters.command("drm_bulk", prefixes=prefixes)
 )
-async def bulk_drm(bot: ace, m: Message):
-    """Bulk DRM video processing."""
-    # Ask the user to upload the JSON file
-    await m.reply_text("Please upload the JSON file containing video data.")
-    file_msg = await bot.listen(m.chat.id)
-    
-    # Save the uploaded JSON file
-    if file_msg.document:
-        file_path = f"{Config.DOWNLOAD_LOCATION}/{m.chat.id}/bulk_data.json"
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        await file_msg.download(file_path)
-    else:
-        await m.reply_text("Invalid file format. Please send a valid JSON file.")
-        return
-    
-    # Read the JSON file
+async def drm_bulk(bot: ace, m: Message):
+    # Load the JSON data
     try:
-        with open(file_path, "r") as f:
-            video_data = json.load(f)
-    except Exception as e:
-        await m.reply_text(f"Error reading JSON file: {str(e)}")
+        file_path = f"{Config.DOWNLOAD_LOCATION}/videos.json"  # Path to the JSON file
+        with open(file_path, "r") as json_file:
+            videos_data = json.load(json_file)
+    except FileNotFoundError:
+        await m.reply_text("**Error**: JSON file not found!")
+        return
+    except json.JSONDecodeError:
+        await m.reply_text("**Error**: Invalid JSON format!")
         return
 
-    # Loop through each video entry in the JSON file
-    for index, video in enumerate(video_data, start=1):
-        try:
-            mpd = video["mpd"]
-            raw_name = video["name"]
-            Q = video["quality"]
-            CP = video["caption"]
-            keys = video["keys"]  # Should be a string like "KID:KEY KID:KEY ..."
-            
-            # Ensure that keys is a string
-            if isinstance(keys, list):
-                keys = "--key ".join(keys)  # Convert list to space-separated string
-            
-            name = f"{TgClient.parse_name(raw_name)} ({Q}p)"
-            path = f"{Config.DOWNLOAD_LOCATION}/{m.chat.id}/{index}"
-            tPath = f"{Config.DOWNLOAD_LOCATION}/THUMB/{m.chat.id}/{index}"
-            os.makedirs(path, exist_ok=True)
+    # Process each video entry in the JSON file
+    for video in videos_data:
+        mpd = video.get("mpd")
+        raw_name = video.get("name")
+        quality = video.get("quality")
+        caption = video.get("caption")
+        keys = video.get("keys", [])
 
-            BOT = TgClient(bot, m, path)
-            Thumb = await BOT.thumb()
-            prog = await bot.send_message(
-                m.chat.id, f"**Processing Video {index}/{len(video_data)}:** {name}"
-            )
+        # Process each video
+        await process_video(bot, m, mpd, raw_name, quality, caption, keys)
 
-            # Step 1: Download the video
-            cmd1 = f'yt-dlp -o "{path}/fileName.%(ext)s" -f "bestvideo[height<={int(Q)}]+bestaudio" --allow-unplayable-format --external-downloader aria2c "{mpd}"'
-            os.system(cmd1)
 
-            # Step 2: Decrypt the video and audio
-            avDir = os.listdir(path)
-            for data in avDir:
-                if data.endswith("mp4"):
-                    decrypt_cmd = [
-                        "mp4decrypt", keys, f"{path}/{data}", f"{path}/video.mp4"
-                    ]
-                    subprocess.run(decrypt_cmd, check=True)
-                    os.remove(f"{path}/{data}")
-                elif data.endswith("m4a"):
-                    decrypt_cmd = [
-                        "mp4decrypt", keys, f"{path}/{data}", f"{path}/audio.m4a"
-                    ]
-                    subprocess.run(decrypt_cmd, check=True)
-                    os.remove(f"{path}/{data}")
-
-            # Step 3: Merge video and audio
-            cmd4 = f'ffmpeg -i "{path}/video.mp4" -i "{path}/audio.m4a" -c copy "{path}/{name}.mkv"'
-            os.system(cmd4)
-            os.remove(f"{path}/video.mp4")
-            os.remove(f"{path}/audio.m4a")
-
-            filename = f"{path}/{name}.mkv"
-            cc = f"{name}.mkv\n\n**Description:-**\n{CP}"
-
-            # Step 4: Upload to Telegram
-            UL = Upload_to_Tg(
-                bot=bot, m=m, file_path=filename, name=name,
-                Thumb=Thumb, path=path, show_msg=prog, caption=cc
-            )
-            await UL.upload_video()
-        except Exception as e:
-            await bot.send_message(m.chat.id, f"Error processing video {index}: {str(e)}")
-        finally:
-            if os.path.exists(tPath):
-                shutil.rmtree(tPath)
-            shutil.rmtree(path)
-
-    await m.reply_text("Bulk upload completed!")
